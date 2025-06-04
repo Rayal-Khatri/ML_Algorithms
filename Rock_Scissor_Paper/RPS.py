@@ -7,15 +7,23 @@ from sklearn.neural_network import MLPClassifier
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 import pickle
+from collections import Counter
+
+# maps a move to the move that beats it
+COUNTER = {"R": "P", "P": "S", "S": "R"}
 
 
 def player(prev_play, opponent_history=[]):
     if not hasattr(player, "our_moves"):
         player.our_moves = []
         player.opp_moves = []
-
+        player.rounds_played = 0
+        player.use_quincy = True
+        player.counter = 0
 
     ###############################---------------DAtaset Creation-----------------###############################
+    # if not prev_play:
+    #     opponent_history.append("R")
     # opponent_history.append(prev_play)
 
     # if prev_play in ["R", "P", "S"]:
@@ -48,11 +56,30 @@ def player(prev_play, opponent_history=[]):
 
     ###############################---------------Algorithm PLAY-----------------###############################
     # final_move = counter_abbey(prev_play)
-    final_move = abbey_evil(prev_play)
+    # final_move = abbey_evil(prev_play)
+    # final_move = quincy_evil(prev_play)
+    # final_move = kris_evil(prev_play)
 
-
-
-
+    bot_name = detect_bot(opponent_history)
+    # print(f"Detected Bot: {bot_name}")
+    
+    # Call the respective bot's strategy function
+    if bot_name == "kris":
+        final_move = kris_evil(prev_play)
+    elif bot_name == "quincy":
+        # print("Using Quincy Evil Strategy")
+        final_move = quincy_evil(prev_play)
+    elif bot_name == "mrugesh":
+        final_move = kris_evil(prev_play)
+    elif bot_name == "abbey":
+        final_move = abbey_evil(prev_play)
+    else:
+        # If bot is unknown, use random move
+        final_move = random.choice(["R", "P", "S"])
+    
+    player.our_moves.append(final_move)
+    opponent_history.append(prev_play)
+    
     return final_move
 
 def update_dataset(our, opp):
@@ -98,6 +125,55 @@ def encode_move(our):
 
 
 
+def detect_bot(your_history, opp_history):
+    n = len(opp_history)
+    if n < 12:
+        return "Unknown"  # wait until at least 20 rounds
+
+    # 1) Check Quincy: fixed 5‐move cycle ["R","R","P","P","S"]
+    cycle = ["R", "R", "P", "P", "S"]
+    is_quincy = True
+    for i, move in enumerate(opp_history):
+        if move != cycle[i % 5]:
+            is_quincy = False
+            break
+    if is_quincy:
+        print("Detected Quincy Bot")
+        return "quincy"
+
+    # 2) Check Kris: opp_move[i] == counter(your_move[i-1]) for all i ≥ 1
+    is_kris = True
+    for i in range(1, n):
+        expected = COUNTER.get(your_history[i - 1], None)
+        if opp_history[i] != expected:
+            is_kris = False
+            break
+    if is_kris:
+        print("Detected Kris Bot")
+        return "kris"
+
+    # 3) Check Mrugesh: for i ≥ 10,
+    #    opp_move[i] == counter(most_frequent(your_history[i-10 : i]))
+    is_mrugesh = True
+    for i in range(10, n):
+        window = your_history[i - 10 : i]
+        most_common = Counter(window).most_common(1)[0][0]
+        if opp_history[i] != COUNTER[most_common]:
+            is_mrugesh = False
+            break
+    if is_mrugesh:
+        print("Detected Mrugesh Bot")
+        return "mrugesh"
+
+    # 4) Otherwise treat as Abbey
+    print("Detected Abbey Bot")
+    return "abbey"
+
+
+
+
+
+
 def get_result(our, opp):
     win_map = {('R', 'S'), ('S', 'P'), ('P', 'R')}
     
@@ -106,7 +182,7 @@ def get_result(our, opp):
     for o, op in zip(our, opp):
         if o == op:
             results.append(0)  # Draw
-        elif (o, op) in win_map:
+        elif (o == "P" and op == "R") or (o == "R" and op == "S") or (o == "S" and op == "P"):
             results.append(1)  # Win
         else:
             results.append(-1)  # Loss
@@ -172,13 +248,7 @@ def ask_model(last_move, prev_play):
 
 
 
-
-
-
-
-
-
-def counter_abbey(prev_opponent_play,
+def abbey_evil(prev_opponent_play,
                   my_history=[],
                   opponent_history=[],
                   cycle_position=[0]):
@@ -245,14 +315,13 @@ def counter_abbey(prev_opponent_play,
                 our_counter = {'S': 'R', 'P': 'S', 'R': 'P'}
                 my_move = our_counter[abbey_move]
             else:
-                # Fallback: use anti-pattern strategy
+ 
                 cycle_moves = ['R', 'P', 'S', 'P', 'R', 'S']
                 my_move = cycle_moves[cycle_position[0] % len(cycle_moves)]
                 cycle_position[0] += 1
         else:
             my_move = 'S'
-    
-    # Add some controlled unpredictability to avoid being counter-predicted
+
     if move_num > 20 and move_num % 7 == 0:
         # Occasionally break pattern
         import random
@@ -263,40 +332,64 @@ def counter_abbey(prev_opponent_play,
 
 
 
-def abbey_evil(prev_opponent_play,
-          opponent_history=[],
-          play_order=[{
-              "RR": 0,
-              "RP": 0,
-              "RS": 0,
-              "PR": 0,
-              "PP": 0,
-              "PS": 0,
-              "SR": 0,
-              "SP": 0,
-              "SS": 0,
-          }]):
 
-    if not prev_opponent_play:
-        prev_opponent_play = 'R'
-    opponent_history.append(prev_opponent_play)
+def quincy_evil(prev_play, history=[]):
+    
+    # The underlying pattern in quincy's bot
+    base_pattern = ["R", "R", "P", "P", "S"]
+    
+    # Record the opponent's (quincy's) previous move if it's valid.
+    if prev_play in ("R", "P", "S"):
+        history.append(prev_play)
+        
+    # The round number here is the number of moves observed plus 
+    # one for the move we are about to play.
+    round_no = len(history) + 1
 
-    last_two = "".join(opponent_history[-2:])
-    if len(last_two) == 2:
-        play_order[0][last_two] += 1
+    # Try to determine the phase offset. For a given offset (0-4),
+    # check if every observed move fits the pattern:
+    # predicted_move at round i should be base_pattern[(i + offset) % 5].
+    possible_offsets = []
+    for offset in range(5):
+        valid = True
+        for i, move in enumerate(history, start=1):
+            if move != base_pattern[(i + offset) % 5]:
+                valid = False
+                break
+        if valid:
+            possible_offsets.append(offset)
+    
+    if possible_offsets:
+        # Use the first valid offset.
+        offset = possible_offsets[0]
+        # Predict opponent's next move.
+        predicted_move = base_pattern[(round_no + offset) % 5]
+    else:
+        # Fallback: if we don't have a confident offset yet,
+        # simply use the opponent's last move as a (naive) proxy for prediction.
+        predicted_move = history[-1] if history else "R"
+    
+    # Determine our winning move:
+    # Paper beats Rock, Scissors beats Paper, and Rock beats Scissors.
+    counter_moves = {"R": "P", "P": "S", "S": "R"}
+    return counter_moves[predicted_move]
 
-    potential_plays = [
-        prev_opponent_play + "R",
-        prev_opponent_play + "P",
-        prev_opponent_play + "S",
-    ]
 
-    sub_order = {
-        k: play_order[0][k]
-        for k in potential_plays if k in play_order[0]
-    }
 
-    prediction = max(sub_order, key=sub_order.get)[-1:]
 
-    ideal_response = {'P': 'S', 'R': 'P', 'S': 'R'}
-    return ideal_response[prediction]
+
+def kris_evil(prev_opponent_play, my_last_move=[None]):
+    if my_last_move[0] is None:
+        my_last_move[0] = 'R'  
+        return 'R' 
+    
+    kris_response = {'P': 'S', 'R': 'P', 'S': 'R'}
+    kris_will_play = kris_response[my_last_move[0]]
+    
+
+    our_counter = {'P': 'S', 'R': 'P', 'S': 'R'}
+    our_move = our_counter[kris_will_play]
+
+    my_last_move[0] = our_move
+    
+    return our_move
